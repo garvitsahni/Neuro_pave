@@ -2,8 +2,12 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
 import { Sensor } from '@/lib/mock-data';
+
+interface ClickedLocation {
+  lat: number;
+  lng: number;
+}
 
 interface LeafletMapProps {
   sensors: Sensor[];
@@ -12,13 +16,32 @@ interface LeafletMapProps {
   showHeatmap: boolean;
   showConnections: boolean;
   mapStyle: 'dark' | 'satellite';
+  onMapClick?: (location: ClickedLocation) => void;
+  clickedLocation?: ClickedLocation | null;
 }
 
 // ─── CSS ────────────────────────────────────────────────────────────────────
 const mapCSS = `
   .leaflet-container {
-    background: #0a0d1f !important;
+    background: #050505 !important;
     font-family: 'Inter', system-ui, sans-serif;
+  }
+  .leaflet-pane,
+  .leaflet-map-pane,
+  .leaflet-control-container {
+    background: #050505 !important;
+  }
+  .leaflet-tile-pane {
+    background: #050505 !important;
+  }
+  .leaflet-tile-container,
+  .leaflet-layer {
+    opacity: 1 !important;
+  }
+  .leaflet-tile {
+    opacity: 1 !important;
+    filter: none !important;
+    mix-blend-mode: normal !important;
   }
   .leaflet-control-zoom {
     border: none !important;
@@ -193,15 +216,109 @@ const TYPE_COLORS: Record<string, string> = {
   vibration: '#3b82f6', strain: '#22c55e', temperature: '#f59e0b', humidity: '#8b5cf6',
 };
 
-const TILE_LAYERS = {
-  dark:      'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-  satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+type TileStyle = 'dark' | 'satellite';
+
+// Providers are tried in order; on repeated tile errors we fall back.
+const TILE_CONFIG: Record<
+  TileStyle,
+  Array<{ url: string; attribution: string; options?: L.TileLayerOptions }>
+> = {
+  dark: [
+    {
+      url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+      attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
+      options: { subdomains: 'abcd', maxZoom: 19 },
+    },
+    {
+      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      options: { maxZoom: 19 },
+    },
+  ],
+  satellite: [
+    {
+      url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      attribution: '&copy; Esri',
+      options: { maxZoom: 19 },
+    },
+    {
+      url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      options: { maxZoom: 19 },
+    },
+  ],
 };
 
-const TILE_ATTRS = {
-  dark:      '&copy; <a href="https://carto.com/">CARTO</a>',
-  satellite: '&copy; Esri',
-};
+function addTileLayerWithFallback(
+  map: L.Map,
+  style: TileStyle,
+  tileLayerRef: React.MutableRefObject<L.TileLayer | null>,
+  index = 0,
+): L.TileLayer {
+  const chain = TILE_CONFIG[style];
+  const cfg = chain[Math.min(index, chain.length - 1)];
+  const layer = L.tileLayer(cfg.url, {
+    attribution: cfg.attribution,
+    crossOrigin: true,
+    ...(cfg.options ?? {}),
+  }).addTo(map);
+
+  let errorCount = 0;
+  let loadedCount = 0;
+  const maybeFallback = () => {
+    const nextIndex = index + 1;
+    if (nextIndex >= chain.length) return;
+    if (tileLayerRef.current !== layer) return;
+    layer.remove();
+    const next = addTileLayerWithFallback(map, style, tileLayerRef, nextIndex);
+    tileLayerRef.current = next;
+  };
+
+  layer.on('tileerror', () => {
+    errorCount += 1;
+    if (errorCount < 2) return;
+    maybeFallback();
+  });
+
+  layer.on('tileload', () => {
+    loadedCount += 1;
+  });
+
+  // Some environments don't emit tileerror reliably. If nothing loads soon, fallback.
+  const t = window.setTimeout(() => {
+    if (loadedCount === 0) {
+      maybeFallback();
+    }
+  }, 2200);
+  layer.on('remove', () => window.clearTimeout(t));
+
+  return layer;
+}
+
+const createClickedIcon = (): L.DivIcon =>
+  L.divIcon({
+    className: 'clicked-location-marker',
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+    popupAnchor: [0, -18],
+    html: `
+      <div style="position:relative;width:32px;height:32px;">
+        <div style="position:absolute;inset:-10px;border-radius:50%;border:2px solid rgba(99,102,241,0.45);opacity:0.35;animation:ring-pulse 2s ease-out infinite;"></div>
+        <div style="
+          position:absolute;inset:0;
+          background: radial-gradient(circle at 35% 35%, #6366f1, #4f46e5);
+          border-radius:50%;
+          border: 3px solid rgba(255,255,255,0.9);
+          box-shadow: 0 0 20px rgba(99,102,241,0.45), 0 2px 10px rgba(0,0,0,0.35);
+          display:flex;align-items:center;justify-content:center;
+          font-size:14px;font-weight:900;color:white;
+          font-family:'Inter',system-ui,sans-serif;
+        ">📍</div>
+      </div>
+    `,
+  });
 
 // ─── Icon Factory ────────────────────────────────────────────────────────────
 const createSensorIcon = (sensor: Sensor, isSelected: boolean): L.DivIcon => {
@@ -381,6 +498,8 @@ export default function LeafletMap({
   showHeatmap,
   showConnections,
   mapStyle,
+  onMapClick,
+  clickedLocation,
 }: LeafletMapProps) {
   const mapRef            = useRef<L.Map | null>(null);
   const containerRef      = useRef<HTMLDivElement>(null);
@@ -388,18 +507,20 @@ export default function LeafletMap({
   const connectionLayerRef= useRef<L.LayerGroup | null>(null);
   const heatLayerRef      = useRef<L.LayerGroup | null>(null);
   const tileLayerRef      = useRef<L.TileLayer | null>(null);
+  const clickedMarkerRef  = useRef<L.Marker | null>(null);
   const prevSelectedRef   = useRef<string | null>(null);
+  const mapStyleRef       = useRef<TileStyle>(mapStyle);
+  const didInitialFitRef  = useRef(false);
   const [mapReady, setMapReady] = useState(false);
 
   // ── Inject CSS once ───────────────────────────────────────────────────────
   useEffect(() => {
+    const id = 'neuropave-leaflet-css';
+    if (document.getElementById(id)) return;
     const el = document.createElement('style');
-    el.id = 'neuropave-leaflet-css';
-    if (!document.getElementById('neuropave-leaflet-css')) {
-      el.textContent = mapCSS;
-      document.head.appendChild(el);
-    }
-    return () => { el.remove(); };
+    el.id = id;
+    el.textContent = mapCSS;
+    document.head.appendChild(el);
   }, []);
 
   // ── Init map ──────────────────────────────────────────────────────────────
@@ -407,8 +528,9 @@ export default function LeafletMap({
     if (!containerRef.current || mapRef.current) return;
 
     const map = L.map(containerRef.current, {
-      center: [28.61, 77.20],
-      zoom: 12,
+      // India-focused default view (Delhi NCR)
+      center: [28.6139, 77.2090],
+      zoom: 11,
       zoomControl: true,
       attributionControl: true,
       scrollWheelZoom: true,
@@ -418,28 +540,34 @@ export default function LeafletMap({
       markerZoomAnimation: true,
     });
 
-    const tileOpts: L.TileLayerOptions = {
-      attribution: TILE_ATTRS.dark,
-      maxZoom: 19,
-      subdomains: 'abcd',
-    };
-    
-    const tile = L.tileLayer(TILE_LAYERS[mapStyle], {
-      ...tileOpts,
-      attribution: TILE_ATTRS[mapStyle],
-      ...(mapStyle === 'dark' ? { subdomains: 'abcd' } : {})
-    }).addTo(map);
-
+    // Add initial tiles (with fallback chain).
+    const tile = addTileLayerWithFallback(map, mapStyleRef.current, tileLayerRef);
     tileLayerRef.current = tile;
     connectionLayerRef.current = L.layerGroup().addTo(map);
     heatLayerRef.current = L.layerGroup().addTo(map);
 
+    if (onMapClick) {
+      map.on('click', (e: L.LeafletMouseEvent) => {
+        onMapClick({ lat: e.latlng.lat, lng: e.latlng.lng });
+      });
+    }
+
     mapRef.current = map;
+
+    // Fix blank/grey maps when mounted inside animated/responsive containers.
+    // Leaflet needs an explicit size recalculation after layout settles.
+    const invalidate = () => map.invalidateSize({ pan: false });
+    const t0 = setTimeout(invalidate, 60);
+    const t1 = setTimeout(invalidate, 300);
+    window.addEventListener('resize', invalidate);
 
     // Small delay so tiles start loading before we mark ready
     const t = setTimeout(() => setMapReady(true), 120);
     return () => {
       clearTimeout(t);
+      clearTimeout(t0);
+      clearTimeout(t1);
+      window.removeEventListener('resize', invalidate);
       map.remove();
       mapRef.current = null;
       setMapReady(false);
@@ -448,20 +576,30 @@ export default function LeafletMap({
 
   // ── Tile layer switch ─────────────────────────────────────────────────────
   useEffect(() => {
-    if (!tileLayerRef.current || !mapRef.current) return;
-    
-    if (tileLayerRef.current) {
-        tileLayerRef.current.remove();
-    }
-    
-    const tile = L.tileLayer(TILE_LAYERS[mapStyle], {
-        attribution: TILE_ATTRS[mapStyle],
-        maxZoom: 19,
-        ...(mapStyle === 'dark' ? { subdomains: 'abcd' } : {})
-    }).addTo(mapRef.current);
-    
-    tileLayerRef.current = tile;
+    if (!mapRef.current) return;
+
+    // Skip on initial mount; only switch when it actually changes.
+    if (mapStyleRef.current === mapStyle) return;
+    mapStyleRef.current = mapStyle;
+
+    tileLayerRef.current?.remove();
+    tileLayerRef.current = addTileLayerWithFallback(mapRef.current, mapStyle, tileLayerRef);
   }, [mapStyle]);
+
+  // ── Clicked location marker ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!mapRef.current || !mapReady) return;
+    clickedMarkerRef.current?.remove();
+    clickedMarkerRef.current = null;
+
+    if (!clickedLocation) return;
+    const marker = L.marker([clickedLocation.lat, clickedLocation.lng], {
+      icon: createClickedIcon(),
+      riseOnHover: true,
+      riseOffset: 500,
+    }).addTo(mapRef.current);
+    clickedMarkerRef.current = marker;
+  }, [clickedLocation, mapReady]);
 
   // ── Stable click handler ref ──────────────────────────────────────────────
   const onSensorClickRef = useRef(onSensorClick);
@@ -519,6 +657,15 @@ export default function LeafletMap({
         markersRef.current.set(sensor.id, marker);
       }
     });
+
+    // Auto-fit only once (otherwise the map "glitches" / keeps jumping during polling).
+    if (!didInitialFitRef.current && sensors.length > 0 && !selectedId) {
+      const bounds = L.latLngBounds(sensors.map(s => [s.latitude, s.longitude]));
+      if (bounds.isValid()) {
+        didInitialFitRef.current = true;
+        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+      }
+    }
   }, [sensors, selectedId, mapReady]);
 
   // ── Update connection lines ───────────────────────────────────────────────
@@ -624,6 +771,8 @@ export default function LeafletMap({
     if (!mapRef.current || !mapReady || !selectedId) return;
     if (prevSelectedRef.current === selectedId) return;
     prevSelectedRef.current = selectedId;
+    // Once a sensor is selected, never auto-fit again.
+    didInitialFitRef.current = true;
 
     const sensor = sensors.find(s => s.id === selectedId);
     if (!sensor) return;
@@ -644,8 +793,12 @@ export default function LeafletMap({
   return (
     <div
       ref={containerRef}
-      className={`w-full h-[560px] ${mapReady ? 'map-ready' : ''}`}
-      style={{ minHeight: 560, background: '#0a0d1f' }}
+      className={`w-full h-[560px] rounded-2xl overflow-hidden border border-white/[0.06] ${mapReady ? 'map-ready' : ''}`}
+      style={{
+        minHeight: 560,
+        background: '#050505',
+        boxShadow: '0 0 40px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.02)',
+      }}
     />
   );
 }

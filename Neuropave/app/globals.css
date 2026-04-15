@@ -140,6 +140,15 @@
   }
 }
 
+@layer utilities {
+  .transition-smooth {
+    @apply transition-[color,background-color,border-color,opacity,box-shadow,transform,filter,backdrop-filter] duration-300 ease-out;
+  }
+  .transition-smooth-fast {
+    @apply transition-[color,background-color,border-color,opacity,box-shadow,transform,filter,backdrop-filter] duration-200 ease-out;
+  }
+}
+
 /* ========== Animations ========== */
 @keyframes pulse-subtle {
   0%, 100% { opacity: 1; }

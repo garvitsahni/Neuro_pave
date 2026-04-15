@@ -63,7 +63,7 @@ export function AlertsPanel({ alerts, onAlertResolve, onAlertDismiss }: AlertsPa
           return (
             <div
               key={alert.id}
-              className={`flex items-start gap-3 p-3.5 rounded-xl border transition-all duration-200 hover:translate-x-0.5 group ${
+              className={`flex items-start gap-3 p-3.5 rounded-xl border transition-smooth-fast hover:translate-x-0.5 group ${
                 isCritical
                   ? 'bg-rose-500/[0.06] border-rose-500/20 hover:border-rose-500/30'
                   : 'bg-amber-500/[0.06] border-amber-500/20 hover:border-amber-500/30'
@@ -100,7 +100,7 @@ export function AlertsPanel({ alerts, onAlertResolve, onAlertDismiss }: AlertsPa
                   })()}
                 </p>
               </div>
-              <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-smooth-fast">
                 {!alert.resolved && (
                   <Button
                     variant="ghost"

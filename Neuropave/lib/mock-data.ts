@@ -32,14 +32,14 @@ export interface Alert {
 // Generate deterministic mock sensors
 export const generateMockSensors = (): Sensor[] => {
   const locations = [
-    { name: 'Highway 101 - Mile 5', lat: 37.7749, lng: -122.4194 },
-    { name: 'Interstate 280 - Mile 12', lat: 37.7849, lng: -122.4094 },
-    { name: 'Bay Bridge Approach', lat: 37.7949, lng: -122.3994 },
-    { name: 'Route 1 - Downtown', lat: 37.7549, lng: -122.4294 },
-    { name: 'Highway 101 - Mile 25', lat: 37.7649, lng: -122.4094 },
-    { name: 'Interstate 680 - Mile 8', lat: 37.7849, lng: -122.3794 },
-    { name: 'Route 9 - Mountain Pass', lat: 37.7449, lng: -122.4394 },
-    { name: 'Bridge Street Overpass', lat: 37.8049, lng: -122.4394 },
+    { name: 'NH-48 — Gurugram Expressway', lat: 28.4595, lng: 77.0266 },
+    { name: 'Noida–Greater Noida Expressway', lat: 28.5355, lng: 77.3910 },
+    { name: 'Ring Road — Dhaula Kuan', lat: 28.5921, lng: 77.1690 },
+    { name: 'DND Flyway — Mayur Vihar', lat: 28.6126, lng: 77.2880 },
+    { name: 'NH-44 — Panipat Stretch', lat: 29.3909, lng: 76.9635 },
+    { name: 'Yamuna Expressway — Jewar', lat: 28.1020, lng: 77.5560 },
+    { name: 'Delhi–Meerut Expressway', lat: 28.6766, lng: 77.4384 },
+    { name: 'Signature Bridge — Wazirabad', lat: 28.7203, lng: 77.2398 },
   ];
 
   const types: Array<'vibration' | 'strain' | 'temperature' | 'humidity'> = [
@@ -89,8 +89,9 @@ export const generateSensorReading = (sensor: Sensor, timestamp: Date): SensorRe
 
   switch (sensor.type) {
     case 'vibration':
-      value = 0.5 + pseudoRandom * 1.5; // 0.5-2.0 m/s²
-      unit = 'm/s²';
+      // For road-condition monitoring, velocity (mm/s) is a common, intuitive vibration unit.
+      value = 0.4 + pseudoRandom * 2.6; // 0.4–3.0 mm/s
+      unit = 'mm/s';
       isAnomaly = sensor.status === 'critical' && pseudoRandom > 0.8;
       break;
     case 'strain':

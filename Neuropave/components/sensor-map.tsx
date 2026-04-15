@@ -11,7 +11,7 @@ interface SensorMapProps {
 }
 
 // We need to load the map component dynamically to avoid SSR issues with Leaflet
-const LeafletMap = dynamic(() => import('@/components/leaflet-map'), {
+const AdvancedMap = dynamic(() => import('@/components/ui/interactive-map').then((m) => m.AdvancedMap), {
   ssr: false,
   loading: () => (
     <div className="w-full h-[560px] bg-[#0a0d1f] rounded-xl flex items-center justify-center">
@@ -36,18 +36,142 @@ export function SensorMap({ sensors, onSensorSelect }: SensorMapProps) {
   const statusColors: Record<string, string> = {
     operational: '#22c55e', warning: '#f59e0b', critical: '#f43f5e', offline: '#6b7280',
   };
+  const typeColors: Record<Sensor['type'], string> = {
+    vibration: '#3b82f6',
+    strain: '#22c55e',
+    temperature: '#f59e0b',
+    humidity: '#8b5cf6',
+  };
+  const typeLetters: Record<Sensor['type'], string> = {
+    vibration: 'V',
+    strain: 'S',
+    temperature: 'T',
+    humidity: 'H',
+  };
+
+  const createLetterIconHtml = (sensor: Sensor, isSelected: boolean) => {
+    const main = statusColors[sensor.status] ?? '#22c55e';
+    const typeCol = typeColors[sensor.type] ?? '#ffffff';
+    const letter = typeLetters[sensor.type] ?? '?';
+    const size = isSelected ? 38 : 26;
+    const ring = sensor.status === 'critical' || sensor.status === 'warning';
+
+    return {
+      size,
+      html: `
+        <div style="position:relative;width:${size}px;height:${size}px;">
+          ${
+            ring
+              ? `<div style="position:absolute;inset:-6px;border-radius:999px;border:2px solid ${main};opacity:0.35;filter:drop-shadow(0 0 10px ${main}55);"></div>`
+              : ''
+          }
+          <div style="
+            position:absolute;inset:0;border-radius:999px;
+            background: radial-gradient(circle at 32% 28%, ${main}ff 0%, ${main}aa 60%, ${main}66 100%);
+            border: ${isSelected ? '2.5px solid rgba(255,255,255,0.85)' : `2px solid ${main}c0`};
+            box-shadow: 0 0 ${isSelected ? 22 : 14}px ${main}60, 0 2px 10px rgba(0,0,0,0.55);
+            display:flex;align-items:center;justify-content:center;
+            font-family: Inter, system-ui, sans-serif;
+            font-weight: 900;
+            color: rgba(255,255,255,0.95);
+            text-shadow: 0 1px 3px rgba(0,0,0,0.55);
+            font-size: ${isSelected ? 15 : 10}px;
+            line-height: 1;
+          ">${letter}</div>
+          <div style="
+            position:absolute;
+            bottom:${isSelected ? 1 : 0}px;
+            right:${isSelected ? 1 : 0}px;
+            width:${isSelected ? 9 : 7}px;
+            height:${isSelected ? 9 : 7}px;
+            border-radius:999px;
+            background:${typeCol};
+            border:1.5px solid rgba(8,10,24,0.8);
+            box-shadow: 0 0 8px ${typeCol}80;
+          "></div>
+        </div>
+      `,
+    };
+  };
 
   const handleSensorClick = (sensor: Sensor) => {
     setSelectedMarker(sensor.id);
     onSensorSelect?.(sensor);
   };
 
+  const markers = useMemo(
+    () =>
+      sensors.map((s) => ({
+        ...(() => {
+          const icon = createLetterIconHtml(s, s.id === selectedMarker);
+          return { iconHtml: icon.html, iconSizePx: icon.size };
+        })(),
+        id: s.id,
+        position: [s.latitude, s.longitude] as [number, number],
+        popup: {
+          title: s.name,
+          content: `${s.location} • ${s.type} • ${s.status}`,
+          image:
+            'https://images.unsplash.com/photo-1523413651479-597eb2da0ad6?auto=format&fit=crop&w=640&q=60',
+        },
+        raw: s,
+      })),
+    [sensors, selectedMarker],
+  );
+
+  const circles = useMemo(() => {
+    if (!showHeatmap) return [];
+    return sensors.map((s) => {
+      const col = statusColors[s.status] ?? '#22c55e';
+      const sev = s.status === 'critical' ? 1 : s.status === 'warning' ? 0.7 : s.status === 'offline' ? 0.25 : 0.35;
+      return {
+        id: `${s.id}-heat`,
+        center: [s.latitude, s.longitude] as [number, number],
+        radius: 450,
+        style: { color: 'transparent', weight: 0, fillColor: col, fillOpacity: 0.12 * sev },
+      };
+    });
+  }, [sensors, showHeatmap, statusColors]);
+
+  const polylines = useMemo(() => {
+    if (!showConnections) return [];
+    const groups: Record<string, Sensor[]> = {};
+    sensors.forEach((s) => {
+      (groups[s.location] ??= []).push(s);
+    });
+    const lines: Array<{ id: string; positions: [number, number][]; style: any }> = [];
+    Object.entries(groups).forEach(([loc, grp]) => {
+      if (grp.length < 2) return;
+      const hasCrit = grp.some((s) => s.status === 'critical');
+      const hasWarn = grp.some((s) => s.status === 'warning');
+      const color = hasCrit ? '#f43f5e' : hasWarn ? '#f59e0b' : '#22c55e';
+      for (let i = 0; i < grp.length - 1; i++) {
+        for (let j = i + 1; j < grp.length; j++) {
+          lines.push({
+            id: `${loc}-${i}-${j}`,
+            positions: [
+              [grp[i].latitude, grp[i].longitude],
+              [grp[j].latitude, grp[j].longitude],
+            ],
+            style: {
+              color,
+              weight: hasCrit ? 2.0 : 1.4,
+              opacity: hasCrit ? 0.55 : hasWarn ? 0.45 : 0.3,
+              dashArray: hasCrit ? '4 5' : hasWarn ? '5 7' : '6 9',
+            },
+          });
+        }
+      }
+    });
+    return lines;
+  }, [sensors, showConnections]);
+
   return (
     <Card className="col-span-full overflow-hidden border-white/[0.06] bg-[#080c1a]/60 backdrop-blur-xl shadow-2xl shadow-black/20">
       <CardHeader className="flex flex-row items-start justify-between gap-4 flex-wrap pb-4 border-b border-white/[0.04]">
         <div>
           <CardTitle className="text-lg font-bold tracking-tight">Live Sensor Network</CardTitle>
-          <CardDescription className="text-xs text-white/30">San Francisco Bay Area — Real-time Infrastructure Monitoring</CardDescription>
+          <CardDescription className="text-xs text-white/30">Delhi NCR — Real-time Road & Bridge Monitoring</CardDescription>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {([
@@ -57,7 +181,7 @@ export function SensorMap({ sensors, onSensorSelect }: SensorMapProps) {
             <button
               key={key}
               onClick={toggle}
-              className={`px-3 py-1.5 text-xs rounded-lg border transition-all duration-200 font-medium ${active ? activeClass : 'border-white/10 text-white/30 hover:border-white/20 hover:text-white/50'}`}
+              className={`px-3 py-1.5 text-xs rounded-lg border transition-smooth-fast font-medium ${active ? activeClass : 'border-white/10 text-white/30 hover:border-white/20 hover:text-white/50'}`}
             >
               {label}
             </button>
@@ -65,7 +189,7 @@ export function SensorMap({ sensors, onSensorSelect }: SensorMapProps) {
           {/* Map style toggle */}
           <button
             onClick={() => setMapStyle(s => s === 'dark' ? 'satellite' : 'dark')}
-            className="px-3 py-1.5 text-xs rounded-lg border border-white/10 text-white/30 hover:border-white/20 hover:text-white/50 transition-all duration-200 font-medium"
+            className="px-3 py-1.5 text-xs rounded-lg border border-white/10 text-white/30 hover:border-white/20 hover:text-white/50 transition-smooth-fast font-medium"
           >
             {mapStyle === 'dark' ? '🛰 Satellite' : '🗺 Dark'}
           </button>
@@ -76,14 +200,28 @@ export function SensorMap({ sensors, onSensorSelect }: SensorMapProps) {
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px]">
           {/* Map */}
           <div className="relative">
-            <LeafletMap
-              sensors={sensors}
-              selectedId={selectedMarker}
-              onSensorClick={handleSensorClick}
-              showHeatmap={showHeatmap}
-              showConnections={showConnections}
-              mapStyle={mapStyle}
-            />
+            <div className="w-full h-[560px] bg-black rounded-xl overflow-hidden">
+              <AdvancedMap
+                center={[28.6139, 77.2090]}
+                zoom={11}
+                markers={markers}
+                circles={circles}
+                polylines={polylines}
+                enableClustering={true}
+                enableSearch={true}
+                enableControls={true}
+                mapLayers={{
+                  openstreetmap: true,
+                  satellite: mapStyle === 'satellite',
+                  traffic: false,
+                }}
+                onMarkerClick={(m: any) => {
+                  const sensor = (m?.raw ?? null) as Sensor | null;
+                  if (sensor) handleSensorClick(sensor);
+                }}
+                style={{ height: '560px', width: '100%' }}
+              />
+            </div>
           </div>
 
           {/* Sidebar */}

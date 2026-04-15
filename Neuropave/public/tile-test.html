@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Tile Provider Test</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+body { margin: 0; background: #111; color: white; font-family: sans-serif; }
+.map { width: 48%; height: 300px; display: inline-block; margin: 1%; border: 2px solid #333; }
+h3 { text-align: center; margin: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+<h2 style="text-align:center;padding:10px;">Tile Provider Test — Delhi NCR (28.61, 77.21)</h2>
+
+<div>
+  <div style="display:inline-block;width:48%;margin:1%">
+    <h3>1. CARTO Dark (no {r})</h3>
+    <div id="map1" class="map"></div>
+  </div>
+  <div style="display:inline-block;width:48%;margin:1%">
+    <h3>2. OSM Standard</h3>
+    <div id="map2" class="map"></div>
+  </div>
+</div>
+<div>
+  <div style="display:inline-block;width:48%;margin:1%">
+    <h3>3. CARTO Dark (with {r})</h3>
+    <div id="map3" class="map"></div>
+  </div>
+  <div style="display:inline-block;width:48%;margin:1%">
+    <h3>4. Esri Satellite</h3>
+    <div id="map4" class="map"></div>
+  </div>
+</div>
+
+<div id="results" style="padding:20px;font-size:14px;"></div>
+
+<script>
+const center = [28.6139, 77.2090];
+const zoom = 12;
+const results = document.getElementById('results');
+
+function testMap(id, url, opts, label) {
+  const map = L.map(id, { center, zoom, zoomControl: false });
+  let loaded = 0, errors = 0;
+  const tile = L.tileLayer(url, opts).addTo(map);
+  tile.on('tileload', () => { loaded++; update(label, loaded, errors); });
+  tile.on('tileerror', () => { errors++; update(label, loaded, errors); });
+  setTimeout(() => {
+    if (loaded === 0) update(label, 0, errors, true);
+  }, 5000);
+}
+
+function update(label, loaded, errors, timeout) {
+  let el = document.getElementById('r-' + label);
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'r-' + label;
+    results.appendChild(el);
+  }
+  const status = loaded > 0 ? '✅ WORKS' : timeout ? '❌ FAILED (timeout)' : '⏳ Loading...';
+  const color = loaded > 0 ? '#22c55e' : timeout ? '#f43f5e' : '#f59e0b';
+  el.innerHTML = `<span style="color:${color};font-weight:bold">${status}</span> ${label} — loaded: ${loaded}, errors: ${errors}`;
+}
+
+testMap('map1',
+  'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+  { subdomains: 'abcd', maxZoom: 19 },
+  'CARTO-no-r'
+);
+
+testMap('map2',
+  'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  { maxZoom: 19 },
+  'OSM-Standard'
+);
+
+testMap('map3',
+  'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  { subdomains: 'abcd', maxZoom: 19 },
+  'CARTO-with-r'
+);
+
+testMap('map4',
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+  { maxZoom: 19 },
+  'Esri-Satellite'
+);
+</script>
+</body>
+</html>

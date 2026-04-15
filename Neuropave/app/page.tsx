@@ -13,7 +13,7 @@ import {
 import {
   ShieldCheck, TrendingUp, Radio, Leaf, ArrowUpRight, ArrowDownRight,
   Zap, Thermometer, Droplets, Layers, ChevronRight, Eye, Clock,
-  AlertTriangle, Activity, Gauge, MapPin,
+  AlertTriangle, Activity, Gauge, MapPin, Brain,
 } from 'lucide-react';
 
 interface SensorReading {
@@ -28,16 +28,6 @@ const genSparkline = (seed: number, n = 20) =>
     x: i,
     y: 40 + Math.sin(i * 0.6 + seed) * 20 + Math.cos(i * 0.3 + seed * 2) * 10 + (Math.sin(seed * 7 + i) * 5),
   }));
-
-// Road segments mock data
-const roadSegments = [
-  { id: 'RD-001', name: 'US-101 North — Mile 5-12', health: 87, trend: 'up', status: 'good', temp: 42, vibration: 0.8, strain: 145, lastInspection: '2 days ago' },
-  { id: 'RD-002', name: 'I-280 Junction — Bridge Approach', health: 64, trend: 'down', status: 'warning', temp: 38, vibration: 1.4, strain: 210, lastInspection: '5 days ago' },
-  { id: 'RD-003', name: 'Bay Bridge — Deck Section A', health: 42, trend: 'down', status: 'critical', temp: 35, vibration: 2.1, strain: 285, lastInspection: '1 day ago' },
-  { id: 'RD-004', name: 'Route 1 — Downtown Corridor', health: 93, trend: 'up', status: 'good', temp: 40, vibration: 0.5, strain: 120, lastInspection: '4 days ago' },
-  { id: 'RD-005', name: 'I-680 — Mountain Pass Section', health: 71, trend: 'flat', status: 'warning', temp: 31, vibration: 1.1, strain: 190, lastInspection: '3 days ago' },
-  { id: 'RD-006', name: 'Highway 101 — Mile 25-30', health: 95, trend: 'up', status: 'good', temp: 39, vibration: 0.3, strain: 105, lastInspection: '1 day ago' },
-];
 
 // Carbon data
 const carbonData = Array.from({ length: 12 }, (_, i) => ({
@@ -60,21 +50,30 @@ export default function Dashboard() {
   const [readings, setReadings] = useState<Record<string, SensorReading>>({});
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedRoad, setSelectedRoad] = useState(roadSegments[0]);
+  const [selectedSensor, setSelectedSensor] = useState<any>(null);
   const [analyticsTab, setAnalyticsTab] = useState<'overview' | 'risk' | 'environment'>('overview');
   const [carbonDelay, setCarbonDelay] = useState(30);
+  const [decaySummary, setDecaySummary] = useState<{
+    failuresNext30Days: number;
+    soonestDecay: { days: number; date: string; segmentName: string } | null;
+  } | null>(null);
+  const [selectedSeries, setSelectedSeries] = useState<Array<{ t: string; v: number }> | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [sensorsRes, alertsRes] = await Promise.all([
+        const [sensorsRes, alertsRes, decayRes] = await Promise.all([
           fetch('/api/sensors'),
           fetch('/api/alerts'),
+          fetch('/api/dashboard/road-decay'),
         ]);
         const sensorsData = await sensorsRes.json();
         const alertsData = await alertsRes.json();
         setSensors(sensorsData.data.map((s: any) => ({ ...s, lastUpdate: new Date(s.lastUpdate) })));
         setAlerts(alertsData.data);
+        if (sensorsData.data.length > 0 && !selectedSensor) {
+          setSelectedSensor(sensorsData.data[0]);
+        }
 
         const readingsMap: Record<string, SensorReading> = {};
         await Promise.all(
@@ -90,6 +89,14 @@ export default function Dashboard() {
           })
         );
         setReadings(readingsMap);
+
+        const decayJson = await decayRes.json();
+        if (decayJson.success) {
+          setDecaySummary({
+            failuresNext30Days: decayJson.failuresNext30Days,
+            soonestDecay: decayJson.soonestDecay,
+          });
+        }
       } catch (error) {
         console.error('Failed to fetch dashboard data:', error);
       } finally {
@@ -101,6 +108,26 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const loadSeries = async () => {
+      if (!selectedSensor?.id) return;
+      try {
+        const r = await fetch(`/api/sensors/${selectedSensor.id}/readings`);
+        const j = await r.json();
+        if (!j?.success) return;
+        const readingsArr = (j.data?.readings ?? []) as Array<{ timestamp: string; value: number }>;
+        const mapped = readingsArr.map((p) => ({
+          t: new Date(p.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          v: Number(p.value),
+        }));
+        setSelectedSeries(mapped);
+      } catch {
+        // keep previous series
+      }
+    };
+    loadSeries();
+  }, [selectedSensor?.id]);
+
   const criticalAlerts = alerts.filter((a) => a.severity === 'critical').length;
   const warningAlerts = alerts.filter((a) => a.severity === 'warning').length;
   const activeSensors = sensors.filter((s) => s.status !== 'offline').length;
@@ -111,6 +138,13 @@ export default function Dashboard() {
     s === 'good' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
     s === 'warning' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
     'bg-rose-500/10 text-rose-400 border-rose-500/20';
+
+  const riskLabel = (status: Sensor['status']) => {
+    if (status === 'critical') return 'High';
+    if (status === 'warning') return 'Medium';
+    if (status === 'offline') return 'Unknown';
+    return 'Low';
+  };
 
   if (loading) {
     return (
@@ -149,8 +183,8 @@ export default function Dashboard() {
                   <span className="text-[10px] font-bold text-emerald-300 uppercase tracking-wider">Live System</span>
                 </div>
               </div>
-              <h2 className="text-2xl font-extrabold text-white tracking-tight mb-1">AI Road Health Intelligence</h2>
-              <p className="text-sm text-white/35 font-medium max-w-md">Predicting infrastructure failures before they happen — powered by real-time sensor fusion and machine learning.</p>
+              <h2 className="text-2xl font-extrabold text-white tracking-tight mb-1">AI Road Health Intelligence — भारत</h2>
+              <p className="text-sm text-white/35 font-medium max-w-md">Predicting road & bridge failures early — powered by real-time sensors and machine learning for Indian corridors.</p>
             </div>
           </section>
 
@@ -178,17 +212,6 @@ export default function Dashboard() {
                 gradient: 'from-emerald-500/10 to-emerald-500/[0.02]',
                 icon: <Radio className="w-5 h-5" />,
                 sparkSeed: 2,
-              },
-              {
-                label: 'Predicted Failures',
-                value: '12',
-                sub: 'Next 30 days',
-                trend: '-3',
-                trendUp: false,
-                color: '#f59e0b',
-                gradient: 'from-amber-500/10 to-amber-500/[0.02]',
-                icon: <AlertTriangle className="w-5 h-5" />,
-                sparkSeed: 3,
               },
               {
                 label: 'CO₂ Saved',
@@ -241,6 +264,49 @@ export default function Dashboard() {
                 </div>
               </div>
             ))}
+            <Link href="/predictions" className="contents" title="Open XGBoost prediction — manual inputs & decay timeline">
+              <div
+                className={`group relative p-5 rounded-2xl bg-gradient-to-br ${'from-amber-500/10 to-amber-500/[0.02]'} border border-white/[0.06] hover:border-white/[0.1] transition-all duration-300 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-black/10 overflow-hidden cursor-pointer`}
+              >
+                <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+                <div className="relative">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="p-2 rounded-xl border border-white/[0.06]" style={{ backgroundColor: '#f59e0b12', color: '#f59e0b' }}>
+                      <AlertTriangle className="w-5 h-5" />
+                    </div>
+                    <div className={`flex items-center gap-1 text-[11px] font-bold text-amber-400 tabular-nums`}>
+                      <Clock className="w-3 h-3 opacity-80" />
+                      {decaySummary?.soonestDecay ? `~${decaySummary.soonestDecay.days}d` : '—'}
+                    </div>
+                  </div>
+                  <p className="text-3xl font-extrabold text-white tracking-tight tabular-nums mb-0.5 animate-count-up">
+                    {decaySummary ? decaySummary.failuresNext30Days : '—'}
+                  </p>
+                  <p className="text-[10px] uppercase tracking-[0.15em] text-white/25 font-bold mb-0.5">Predicted Failures</p>
+                  <p className="text-xs text-white/35 leading-snug">
+                    {decaySummary?.soonestDecay
+                      ? `Soonest road decay ~${decaySummary.soonestDecay.days}d · ${decaySummary.soonestDecay.date}`
+                      : 'Next 30 days · XGBoost'}
+                  </p>
+                  {decaySummary?.soonestDecay && (
+                    <p className="text-[10px] text-white/25 mt-1 line-clamp-2">{decaySummary.soonestDecay.segmentName}</p>
+                  )}
+                  <div className="mt-3 h-8 opacity-50 group-hover:opacity-80 transition-opacity">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={genSparkline(3)}>
+                        <defs>
+                          <linearGradient id="kpi-3" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#f59e0b" stopOpacity={0.3} />
+                            <stop offset="100%" stopColor="#f59e0b" stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <Area type="monotone" dataKey="y" stroke="#f59e0b" strokeWidth={1.5} fill="url(#kpi-3)" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </div>
+            </Link>
           </section>
 
           {/* ===================== ROAD HEALTH + ANALYTICS ===================== */}
@@ -248,57 +314,59 @@ export default function Dashboard() {
             {/* Road Health Cards */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold text-white/60 uppercase tracking-[0.12em]">Road Segments</h3>
-                <span className="text-[10px] text-white/25 font-medium">{roadSegments.length} monitored</span>
+                <h3 className="text-sm font-bold text-white/60 uppercase tracking-[0.12em]">Sensor Segments</h3>
+                <span className="text-[10px] text-white/25 font-medium">{sensors.length} monitored</span>
               </div>
               <div className="space-y-2 max-h-[600px] overflow-y-auto pr-1">
-                {roadSegments.map((road) => (
-                  <button
-                    key={road.id}
-                    onClick={() => setSelectedRoad(road)}
-                    className={`w-full text-left p-4 rounded-2xl border transition-all duration-300 group hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/10 ${
-                      selectedRoad.id === road.id
-                        ? 'bg-white/[0.06] border-emerald-500/30 shadow-lg shadow-emerald-500/[0.05]'
-                        : 'bg-white/[0.02] border-white/[0.05] hover:bg-white/[0.04] hover:border-white/[0.08]'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-mono text-white/25">{road.id}</span>
-                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${statusBg(road.status)}`}>
-                          {road.status}
-                        </span>
+                {sensors.map((sensor) => {
+                  const status = sensor.status === 'operational' ? 'good' : sensor.status;
+                  const health = status === 'good' ? 85 : status === 'warning' ? 62 : 38;
+                  return (
+                    <button
+                      key={sensor.id}
+                      onClick={() => setSelectedSensor(sensor)}
+                      className={`w-full text-left p-4 rounded-2xl border transition-all duration-300 group hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/10 ${
+                        selectedSensor?.id === sensor.id
+                          ? 'bg-white/[0.06] border-emerald-500/30 shadow-lg shadow-emerald-500/[0.05]'
+                          : 'bg-white/[0.02] border-white/[0.05] hover:bg-white/[0.04] hover:border-white/[0.08]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-mono text-white/25">{sensor.id}</span>
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${statusBg(status)}`}>
+                            {status}
+                          </span>
+                        </div>
+                        <ChevronRight className={`w-3.5 h-3.5 text-white/15 transition-all ${selectedSensor?.id === sensor.id ? 'text-emerald-400 translate-x-0.5' : 'group-hover:text-white/30'}`} />
                       </div>
-                      <ChevronRight className={`w-3.5 h-3.5 text-white/15 transition-all ${selectedRoad.id === road.id ? 'text-emerald-400 translate-x-0.5' : 'group-hover:text-white/30'}`} />
-                    </div>
-                    <p className="text-sm font-semibold text-white/75 mb-2.5 leading-snug">{road.name}</p>
-                    <div className="flex items-center gap-3">
-                      {/* Health score with ring */}
-                      <div className="relative w-10 h-10 flex-shrink-0">
-                        <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
-                          <circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth="3" />
-                          <circle
-                            cx="18" cy="18" r="15" fill="none"
-                            stroke={statusColor(road.status)}
-                            strokeWidth="3"
-                            strokeDasharray={`${road.health * 0.94} 100`}
-                            strokeLinecap="round"
-                            style={{ filter: `drop-shadow(0 0 4px ${statusColor(road.status)}40)` }}
-                          />
-                        </svg>
-                        <span className="absolute inset-0 flex items-center justify-center text-[10px] font-extrabold text-white/80 tabular-nums">{road.health}</span>
+                      <p className="text-sm font-semibold text-white/75 mb-2.5 leading-snug">{sensor.name}</p>
+                      <div className="flex items-center gap-3">
+                        <div className="relative w-10 h-10 flex-shrink-0">
+                          <svg className="w-full h-full -rotate-90" viewBox="0 0 36 36">
+                            <circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth="3" />
+                            <circle
+                              cx="18" cy="18" r="15" fill="none"
+                              stroke={statusColor(status)}
+                              strokeWidth="3"
+                              strokeDasharray={`${health * 0.94} 100`}
+                              strokeLinecap="round"
+                              style={{ filter: `drop-shadow(0 0 4px ${statusColor(status)}40)` }}
+                            />
+                          </svg>
+                          <span className="absolute inset-0 flex items-center justify-center text-[10px] font-extrabold text-white/80 tabular-nums">{health}</span>
+                        </div>
+                        <div className="flex-1 h-7 opacity-50 group-hover:opacity-80 transition-opacity">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={genSparkline(sensor.id.length, 15)}>
+                              <Line type="monotone" dataKey="y" stroke={statusColor(status)} strokeWidth={1.5} dot={false} />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
                       </div>
-                      {/* Mini chart */}
-                      <div className="flex-1 h-7 opacity-50 group-hover:opacity-80 transition-opacity">
-                        <ResponsiveContainer width="100%" height="100%">
-                          <LineChart data={genSparkline(road.id.charCodeAt(3), 15)}>
-                            <Line type="monotone" dataKey="y" stroke={statusColor(road.status)} strokeWidth={1.5} dot={false} />
-                          </LineChart>
-                        </ResponsiveContainer>
-                      </div>
-                    </div>
-                  </button>
-                ))}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
@@ -323,45 +391,56 @@ export default function Dashboard() {
 
               {/* Selected Road Details */}
               <div className="p-6 rounded-2xl bg-white/[0.03] border border-white/[0.06] space-y-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-[10px] font-mono text-white/25">{selectedRoad.id}</span>
-                      <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${statusBg(selectedRoad.status)}`}>
-                        {selectedRoad.status}
-                      </span>
-                    </div>
-                    <h3 className="text-lg font-bold text-white/90 tracking-tight">{selectedRoad.name}</h3>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-3xl font-extrabold tabular-nums" style={{ color: statusColor(selectedRoad.status), textShadow: `0 0 20px ${statusColor(selectedRoad.status)}25` }}>
-                      {selectedRoad.health}%
-                    </p>
-                    <p className="text-[10px] text-white/25 uppercase tracking-wider font-bold">Health Score</p>
-                  </div>
-                </div>
-
-                {/* Metrics row */}
-                <div className="grid grid-cols-4 gap-3">
-                  {[
-                    { label: 'Temperature', value: `${selectedRoad.temp}°C`, icon: <Thermometer className="w-3.5 h-3.5" />, color: '#f59e0b' },
-                    { label: 'Vibration', value: `${selectedRoad.vibration} m/s²`, icon: <Layers className="w-3.5 h-3.5" />, color: '#3b82f6' },
-                    { label: 'Strain', value: `${selectedRoad.strain} µε`, icon: <Zap className="w-3.5 h-3.5" />, color: '#22c55e' },
-                    { label: 'Last Check', value: selectedRoad.lastInspection, icon: <Clock className="w-3.5 h-3.5" />, color: '#8b5cf6' },
-                  ].map(({ label, value, icon, color }) => (
-                    <div key={label} className="p-3 rounded-xl bg-white/[0.02] border border-white/[0.04]">
-                      <div className="flex items-center gap-1.5 mb-1.5">
-                        <div style={{ color }}>{icon}</div>
-                        <span className="text-[9px] text-white/25 uppercase tracking-wider font-bold">{label}</span>
+                {selectedSensor && (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-[10px] font-mono text-white/25">{selectedSensor.id}</span>
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider border ${statusBg(selectedSensor.status === 'operational' ? 'good' : selectedSensor.status)}`}>
+                            {selectedSensor.status === 'operational' ? 'good' : selectedSensor.status}
+                          </span>
+                        </div>
+                        <h3 className="text-lg font-bold text-white/90 tracking-tight">{selectedSensor.name}</h3>
                       </div>
-                      <p className="text-sm font-bold text-white/70 tabular-nums">{value}</p>
+                      <div className="text-right">
+                        <p className="text-3xl font-extrabold tabular-nums" style={{ color: statusColor(selectedSensor.status === 'operational' ? 'good' : selectedSensor.status), textShadow: `0 0 20px ${statusColor(selectedSensor.status === 'operational' ? 'good' : selectedSensor.status)}25` }}>
+                          {selectedSensor.status === 'operational' ? 85 : selectedSensor.status === 'warning' ? 62 : 38}%
+                        </p>
+                        <p className="text-[10px] text-white/25 uppercase tracking-wider font-bold">Health Score</p>
+                      </div>
                     </div>
-                  ))}
-                </div>
+
+                    {/* Metrics row */}
+                    <div className="grid grid-cols-4 gap-3">
+                      {[
+                        {
+                          label: 'Value',
+                          value: readings[selectedSensor.id]
+                            ? `${Number(readings[selectedSensor.id].value).toFixed(2)} ${readings[selectedSensor.id].unit}`
+                            : '--',
+                          icon: <Activity className="w-3.5 h-3.5" />,
+                          color: '#f59e0b',
+                        },
+                        { label: 'Type', value: selectedSensor.type, icon: <Layers className="w-3.5 h-3.5" />, color: '#3b82f6' },
+                        { label: 'Risk', value: riskLabel(selectedSensor.status), icon: <Zap className="w-3.5 h-3.5" />, color: '#22c55e' },
+                        { label: 'Update', value: 'Live', icon: <Clock className="w-3.5 h-3.5" />, color: '#8b5cf6' },
+                      ].map(({ label, value, icon, color }) => (
+                        <div key={label} className="p-3 rounded-xl bg-white/[0.02] border border-white/[0.04]">
+                          <div className="flex items-center gap-1.5 mb-1.5">
+                            <div style={{ color }}>{icon}</div>
+                            <span className="text-[9px] text-white/25 uppercase tracking-wider font-bold">{label}</span>
+                          </div>
+                          <p className="text-sm font-bold text-white/70 tabular-nums truncate">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
 
                 {/* Chart */}
                 {analyticsTab === 'overview' && (
-                  <div className="h-64">
+                  <div className="h-64 rounded-2xl bg-black/60 border border-white/[0.06] p-4">
                     <p className="text-[10px] uppercase tracking-wider text-white/20 font-bold mb-3">AI Prediction Model — 30 Day Forecast</p>
                     <ResponsiveContainer width="100%" height="100%">
                       <AreaChart data={predictionData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
@@ -414,6 +493,40 @@ export default function Dashboard() {
                         </div>
                       </div>
                     ))}
+                    
+                    <Link href="/predictions">
+                      <button className="w-full mt-4 py-3 px-4 rounded-xl bg-white/[0.04] border border-white/[0.08] hover:bg-white/[0.08] hover:border-white/[0.12] text-xs font-bold text-white transition-all flex items-center justify-center gap-2 group">
+                        <Brain className="w-4 h-4 text-emerald-400 group-hover:scale-110 transition-transform" />
+                        View Detailed AI Predictions
+                        <ChevronRight className="w-3 h-3 text-white/30 group-hover:translate-x-0.5 transition-transform" />
+                      </button>
+                    </Link>
+                  </div>
+                )}
+
+                {analyticsTab === 'environment' && selectedSeries && (
+                  <div className="space-y-3">
+                    <p className="text-[10px] uppercase tracking-wider text-white/20 font-bold">Live Sensor Trace — last 60 minutes</p>
+                    <div className="h-64 rounded-2xl bg-black/60 border border-white/[0.06] p-4">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={selectedSeries} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                          <defs>
+                            <linearGradient id="liveGrad" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#22c55e" stopOpacity={0.22} />
+                              <stop offset="100%" stopColor="#22c55e" stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                          <XAxis dataKey="t" stroke="rgba(255,255,255,0.08)" tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 10 }} tickLine={false} />
+                          <YAxis stroke="rgba(255,255,255,0.08)" tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 10 }} tickLine={false} />
+                          <Tooltip
+                            contentStyle={{ backgroundColor: 'rgba(0,0,0,0.92)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, fontSize: 11, boxShadow: '0 10px 40px rgba(0,0,0,0.6)' }}
+                            labelStyle={{ color: 'rgba(255,255,255,0.45)' }}
+                          />
+                          <Area type="monotone" dataKey="v" stroke="#22c55e" strokeWidth={2} fill="url(#liveGrad)" />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
                   </div>
                 )}
 
